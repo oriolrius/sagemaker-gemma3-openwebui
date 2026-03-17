@@ -1,0 +1,427 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Full stack deployment: SageMaker TGI endpoint + API Gateway + Lambda + OpenWebUI on EC2.
+  Deploys an OpenAI-compatible API backed by a SageMaker endpoint running HuggingFace TGI.
+  Supports integration with existing SageMaker Domain (e.g., sg-finetune) via ExternalSageMakerRoleArn.
+
+Parameters:
+  # Model Configuration
+  HuggingFaceModelId:
+    Type: String
+    Default: oriolrius/myemoji-gemma-3-270m-it
+    Description: HuggingFace model ID to deploy
+
+  SageMakerInstanceType:
+    Type: String
+    Default: ml.g5.xlarge
+    Description: SageMaker endpoint instance type (must be GPU with bfloat16 support for Gemma 3)
+    AllowedValues:
+      - ml.g4dn.xlarge
+      - ml.g4dn.2xlarge
+      - ml.g5.xlarge
+      - ml.g5.2xlarge
+
+  # SageMaker Domain Integration (Optional)
+  ExternalSageMakerRoleArn:
+    Type: String
+    Default: ''
+    Description: >
+      (Optional) ARN of an existing SageMaker execution role from another stack (e.g., sg-finetune).
+      If provided, the endpoint will use this role instead of creating a new one.
+      This enables integration with an existing SageMaker Domain.
+      Example: arn:aws:iam::123456789012:role/sg-finetune-sagemaker-execution-role
+
+  # Lambda Configuration
+  LambdaS3Bucket:
+    Type: String
+    Description: S3 bucket containing Lambda deployment package
+
+  LambdaS3Key:
+    Type: String
+    Description: S3 key for Lambda deployment package
+
+  # EC2 Configuration
+  EC2InstanceType:
+    Type: String
+    Default: t3.small
+    Description: EC2 instance type for OpenWebUI
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+
+  EC2KeyPair:
+    Type: String
+    Default: ''
+    Description: EC2 Key Pair name for SSH access (optional)
+
+  # Network Configuration
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID for EC2 instance
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet ID for EC2 instance (must be public subnet)
+
+  AllowedSSHCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR block allowed for SSH access
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Model Configuration
+        Parameters:
+          - HuggingFaceModelId
+          - SageMakerInstanceType
+      - Label:
+          default: SageMaker Domain Integration (Optional)
+        Parameters:
+          - ExternalSageMakerRoleArn
+      - Label:
+          default: Lambda Configuration
+        Parameters:
+          - LambdaS3Bucket
+          - LambdaS3Key
+      - Label:
+          default: EC2 Configuration
+        Parameters:
+          - EC2InstanceType
+          - EC2KeyPair
+      - Label:
+          default: Network Configuration
+        Parameters:
+          - VpcId
+          - SubnetId
+          - AllowedSSHCidr
+
+Conditions:
+  HasKeyPair: !Not [!Equals [!Ref EC2KeyPair, '']]
+  UseExternalSageMakerRole: !Not [!Equals [!Ref ExternalSageMakerRoleArn, '']]
+  CreateLocalSageMakerRole: !Equals [!Ref ExternalSageMakerRoleArn, '']
+
+Resources:
+  #############################################
+  # SageMaker Resources
+  #############################################
+
+  # Local execution role - only created if ExternalSageMakerRoleArn is not provided
+  SageMakerExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: CreateLocalSageMakerRole
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-sagemaker-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sagemaker.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
+      Policies:
+        - PolicyName: ECRAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: '*'
+
+  SageMakerModel:
+    Type: AWS::SageMaker::Model
+    Properties:
+      ModelName: !Sub '${AWS::StackName}-vllm-model'
+      # Use external role if provided, otherwise use the local role
+      ExecutionRoleArn: !If
+        - UseExternalSageMakerRole
+        - !Ref ExternalSageMakerRoleArn
+        - !GetAtt SageMakerExecutionRole.Arn
+      PrimaryContainer:
+        Image: !Sub '763104351884.dkr.ecr.${AWS::Region}.amazonaws.com/huggingface-pytorch-tgi-inference:2.7.0-tgi3.3.6-gpu-py311-cu124-ubuntu22.04-v1.0'
+        Environment:
+          HF_MODEL_ID: !Ref HuggingFaceModelId
+          SM_NUM_GPUS: '1'
+          MAX_INPUT_TOKENS: '1024'
+          MAX_TOTAL_TOKENS: '2048'
+          DTYPE: bfloat16
+          MAX_CONCURRENT_REQUESTS: '4'
+
+  SageMakerEndpointConfig:
+    Type: AWS::SageMaker::EndpointConfig
+    Properties:
+      EndpointConfigName: !Sub '${AWS::StackName}-vllm-config'
+      ProductionVariants:
+        - VariantName: primary
+          ModelName: !GetAtt SageMakerModel.ModelName
+          InitialInstanceCount: 1
+          InstanceType: !Ref SageMakerInstanceType
+          InitialVariantWeight: 1.0
+          ContainerStartupHealthCheckTimeoutInSeconds: 900
+
+  SageMakerEndpoint:
+    Type: AWS::SageMaker::Endpoint
+    Properties:
+      EndpointName: !Sub '${AWS::StackName}-vllm-endpoint'
+      EndpointConfigName: !GetAtt SageMakerEndpointConfig.EndpointConfigName
+
+  #############################################
+  # Lambda Resources
+  #############################################
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SageMakerInvokePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sagemaker:InvokeEndpoint
+                Resource: !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:endpoint/${AWS::StackName}-vllm-endpoint'
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: SageMakerEndpoint
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-openai-proxy'
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          SAGEMAKER_ENDPOINT_NAME: !Sub '${AWS::StackName}-vllm-endpoint'
+          AWS_REGION_NAME: !Ref AWS::Region
+      Code:
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: !Ref LambdaS3Key
+
+  #############################################
+  # API Gateway Resources
+  #############################################
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub '${AWS::StackName}-api'
+      ProtocolType: HTTP
+      Description: OpenAI-compatible API for SageMaker TGI endpoint
+      CorsConfiguration:
+        AllowOrigins: ['*']
+        AllowMethods: [GET, POST, OPTIONS]
+        AllowHeaders: [Content-Type, Authorization]
+
+  HttpApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: '$default'
+      AutoDeploy: true
+
+  LambdaIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt LambdaFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  ChatCompletionsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'POST /v1/chat/completions'
+      Target: !Sub 'integrations/${LambdaIntegration}'
+
+  CompletionsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'POST /v1/completions'
+      Target: !Sub 'integrations/${LambdaIntegration}'
+
+  ModelsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'GET /v1/models'
+      Target: !Sub 'integrations/${LambdaIntegration}'
+
+  LambdaApiGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*'
+
+  #############################################
+  # EC2 Resources (OpenWebUI)
+  #############################################
+
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${AWS::StackName}-openwebui-sg'
+      GroupDescription: Security group for OpenWebUI EC2 instance
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP access
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS access
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSSHCidr
+          Description: SSH access
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All outbound traffic
+
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-ec2-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: S3ReadAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub 'arn:aws:s3:::${LambdaS3Bucket}/openwebui/*'
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub '${AWS::StackName}-ec2-profile'
+      Roles:
+        - !Ref EC2Role
+
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    DependsOn: HttpApi
+    Properties:
+      InstanceType: !Ref EC2InstanceType
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      SubnetId: !Ref SubnetId
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      KeyName: !If [HasKeyPair, !Ref EC2KeyPair, !Ref 'AWS::NoValue']
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-openwebui'
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -ex
+
+          # Download OpenWebUI files from S3
+          mkdir -p /opt/openwebui
+          cd /opt/openwebui
+
+          aws s3 cp s3://${LambdaS3Bucket}/openwebui/docker-compose.yml .
+          aws s3 cp s3://${LambdaS3Bucket}/openwebui/setup.sh .
+          chmod +x setup.sh
+
+          # Set environment and run setup
+          export OPENAI_API_BASE_URL="${HttpApi.ApiEndpoint}"
+          ./setup.sh
+
+          echo "OpenWebUI deployment complete" > /var/log/openwebui-setup.log
+
+  EC2ElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref EC2Instance
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-openwebui-eip'
+
+Outputs:
+  SageMakerEndpointName:
+    Description: SageMaker endpoint name
+    Value: !Sub '${AWS::StackName}-vllm-endpoint'
+
+  SageMakerExecutionRoleArn:
+    Description: SageMaker execution role ARN being used
+    Value: !If
+      - UseExternalSageMakerRole
+      - !Ref ExternalSageMakerRoleArn
+      - !GetAtt SageMakerExecutionRole.Arn
+
+  SageMakerIntegrationMode:
+    Description: Whether using external Domain role or standalone
+    Value: !If
+      - UseExternalSageMakerRole
+      - 'Integrated (using external SageMaker Domain role)'
+      - 'Standalone (using locally created role)'
+
+  ApiGatewayEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !GetAtt HttpApi.ApiEndpoint
+
+  OpenWebUIUrl:
+    Description: OpenWebUI URL
+    Value: !Sub 'http://${EC2ElasticIP}'
+
+  EC2InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref EC2Instance
+
+  EC2PublicIP:
+    Description: EC2 Public IP (Elastic IP)
+    Value: !Ref EC2ElasticIP
+
+  TestCurlCommand:
+    Description: Test the API Gateway directly
+    Value: !Sub |
+      curl -X POST ${HttpApi.ApiEndpoint}/v1/chat/completions \
+        -H "Content-Type: application/json" \
+        -d '{"messages": [{"role": "user", "content": "The future of AI is"}], "max_tokens": 50}'
+
+  SSHCommand:
+    Description: SSH command to connect to EC2 instance
+    Value: !Sub 'ssh -i <your-key.pem> ec2-user@${EC2ElasticIP}'

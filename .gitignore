@@ -1,0 +1,33 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+uv.lock
+.pytest_cache/
+
+# Build artifacts
+.build/
+
+# AWS credentials (never commit)
+aws_credentials.yaml
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Local artifacts
+*.tar.gz
+local_model/
+
+# OpenWebUI data (local development)
+openwebui/data/
+openwebui/.env

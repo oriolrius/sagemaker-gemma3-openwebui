@@ -1,0 +1,222 @@
+name: Deploy Full Stack
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack_name:
+        description: 'CloudFormation stack name'
+        type: string
+        default: 'openai-sagemaker-stack'
+      model_id:
+        description: 'HuggingFace model ID'
+        type: string
+        default: 'oriolrius/myemoji-gemma-3-270m-it'
+      sagemaker_instance:
+        description: 'SageMaker instance type (g5 recommended for bfloat16/Gemma 3)'
+        type: choice
+        options:
+          - ml.g5.xlarge
+          - ml.g5.2xlarge
+          - ml.g4dn.xlarge
+          - ml.g4dn.2xlarge
+        default: 'ml.g5.xlarge'
+      ec2_instance:
+        description: 'EC2 instance type'
+        type: choice
+        options:
+          - t3.micro
+          - t3.small
+          - t3.medium
+        default: 't3.small'
+
+jobs:
+  deploy:
+    name: Deploy SageMaker + API Gateway + OpenWebUI
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Get AWS Account ID
+        id: aws
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
+          echo "AWS Account: $ACCOUNT_ID"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Package Lambda function
+        run: |
+          echo "Creating Lambda deployment package..."
+          mkdir -p .build/package
+          pip install boto3 --target .build/package --quiet
+          cp -r lambda/openai-proxy/src/* .build/package/
+          cd .build/package && zip -r ../lambda-openai-proxy.zip . -q
+          echo "Lambda package created: $(du -h ../*.zip | cut -f1)"
+
+      - name: Set S3 bucket name
+        id: s3
+        run: |
+          BUCKET="${{ inputs.stack_name }}-lambda-${{ steps.aws.outputs.account_id }}-${{ secrets.AWS_REGION }}"
+          echo "bucket=$BUCKET" >> $GITHUB_OUTPUT
+          echo "S3 Bucket: $BUCKET"
+
+      - name: Create S3 bucket
+        run: |
+          BUCKET="${{ steps.s3.outputs.bucket }}"
+          if aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+            echo "Bucket already exists: $BUCKET"
+          else
+            echo "Creating bucket: $BUCKET"
+            aws s3api create-bucket \
+              --bucket "$BUCKET" \
+              --region "${{ secrets.AWS_REGION }}" \
+              --create-bucket-configuration LocationConstraint="${{ secrets.AWS_REGION }}"
+          fi
+
+      - name: Upload Lambda package to S3
+        run: |
+          aws s3 cp .build/lambda-openai-proxy.zip \
+            "s3://${{ steps.s3.outputs.bucket }}/lambda/${{ inputs.stack_name }}/lambda-openai-proxy.zip"
+          echo "Lambda uploaded to S3"
+
+      - name: Upload OpenWebUI files to S3
+        run: |
+          aws s3 cp openwebui/docker-compose.yml \
+            "s3://${{ steps.s3.outputs.bucket }}/openwebui/docker-compose.yml"
+          aws s3 cp openwebui/setup.sh \
+            "s3://${{ steps.s3.outputs.bucket }}/openwebui/setup.sh"
+          echo "OpenWebUI files uploaded to S3"
+
+      - name: Deploy CloudFormation stack
+        run: |
+          echo "Deploying CloudFormation stack: ${{ inputs.stack_name }}"
+          echo "This may take 15-20 minutes (SageMaker endpoint startup)..."
+
+          aws cloudformation deploy \
+            --region "${{ secrets.AWS_REGION }}" \
+            --stack-name "${{ inputs.stack_name }}" \
+            --template-file infra/full-stack.yaml \
+            --parameter-overrides \
+              HuggingFaceModelId="${{ inputs.model_id }}" \
+              SageMakerInstanceType="${{ inputs.sagemaker_instance }}" \
+              EC2InstanceType="${{ inputs.ec2_instance }}" \
+              VpcId="${{ secrets.VPC_ID }}" \
+              SubnetId="${{ secrets.SUBNET_ID }}" \
+              LambdaS3Bucket="${{ steps.s3.outputs.bucket }}" \
+              LambdaS3Key="lambda/${{ inputs.stack_name }}/lambda-openai-proxy.zip" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset
+
+          echo "CloudFormation deployment complete"
+
+      - name: Get stack outputs
+        id: outputs
+        run: |
+          echo "Fetching stack outputs..."
+
+          API_URL=$(aws cloudformation describe-stacks \
+            --region "${{ secrets.AWS_REGION }}" \
+            --stack-name "${{ inputs.stack_name }}" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiGatewayEndpoint'].OutputValue" \
+            --output text)
+
+          EC2_IP=$(aws cloudformation describe-stacks \
+            --region "${{ secrets.AWS_REGION }}" \
+            --stack-name "${{ inputs.stack_name }}" \
+            --query "Stacks[0].Outputs[?OutputKey=='EC2PublicIP'].OutputValue" \
+            --output text)
+
+          ENDPOINT_NAME=$(aws cloudformation describe-stacks \
+            --region "${{ secrets.AWS_REGION }}" \
+            --stack-name "${{ inputs.stack_name }}" \
+            --query "Stacks[0].Outputs[?OutputKey=='SageMakerEndpointName'].OutputValue" \
+            --output text)
+
+          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+          echo "ec2_ip=$EC2_IP" >> $GITHUB_OUTPUT
+          echo "endpoint_name=$ENDPOINT_NAME" >> $GITHUB_OUTPUT
+
+          echo "API Gateway: $API_URL"
+          echo "EC2 IP: $EC2_IP"
+          echo "SageMaker Endpoint: $ENDPOINT_NAME"
+
+      - name: Wait for OpenWebUI to be ready
+        run: |
+          echo "Waiting for OpenWebUI to be ready..."
+          for i in {1..30}; do
+            if curl -sf "http://${{ steps.outputs.outputs.ec2_ip }}" -o /dev/null 2>/dev/null; then
+              echo "OpenWebUI is ready!"
+              exit 0
+            fi
+            echo "Attempt $i/30: OpenWebUI not ready yet, waiting 10s..."
+            sleep 10
+          done
+          echo "Warning: OpenWebUI may still be starting up"
+
+      - name: Test API Gateway
+        run: |
+          echo "Testing API Gateway endpoints..."
+
+          echo "GET /v1/models:"
+          curl -sf "${{ steps.outputs.outputs.api_url }}/v1/models" | head -c 500
+          echo ""
+
+          echo "POST /v1/chat/completions:"
+          curl -sf -X POST "${{ steps.outputs.outputs.api_url }}/v1/chat/completions" \
+            -H "Content-Type: application/json" \
+            -d '{"messages": [{"role": "user", "content": "Hello"}], "max_tokens": 20}' | head -c 500
+          echo ""
+
+      - name: Deployment Summary
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## Deployment Complete
+
+          | Resource | Value |
+          |----------|-------|
+          | Stack Name | \`${{ inputs.stack_name }}\` |
+          | Model | \`${{ inputs.model_id }}\` |
+          | SageMaker Instance | \`${{ inputs.sagemaker_instance }}\` |
+          | EC2 Instance | \`${{ inputs.ec2_instance }}\` |
+
+          ### Endpoints
+
+          | Service | URL |
+          |---------|-----|
+          | API Gateway | ${{ steps.outputs.outputs.api_url }} |
+          | OpenWebUI | http://${{ steps.outputs.outputs.ec2_ip }} |
+          | SageMaker Endpoint | \`${{ steps.outputs.outputs.endpoint_name }}\` |
+
+          ### Test Commands
+
+          \`\`\`bash
+          # List models
+          curl ${{ steps.outputs.outputs.api_url }}/v1/models
+
+          # Chat completion
+          curl -X POST ${{ steps.outputs.outputs.api_url }}/v1/chat/completions \\
+            -H "Content-Type: application/json" \\
+            -d '{"messages": [{"role": "user", "content": "Hello"}], "max_tokens": 50}'
+          \`\`\`
+
+          ### Cost Warning
+
+          This stack costs approximately **\$0.76/hour** (\$18/day).
+
+          **Remember to destroy the stack when done testing!**
+          EOF

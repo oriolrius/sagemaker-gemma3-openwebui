@@ -1,0 +1,164 @@
+name: Destroy Full Stack
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack_name:
+        description: 'CloudFormation stack name to delete'
+        type: string
+        default: 'openai-sagemaker-stack'
+      keep_s3:
+        description: 'Keep S3 bucket (for faster redeployment)'
+        type: boolean
+        default: false
+      confirm:
+        description: 'Type DESTROY to confirm deletion'
+        type: string
+        required: true
+
+jobs:
+  validate:
+    name: Validate confirmation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation
+        if: ${{ inputs.confirm != 'DESTROY' }}
+        run: |
+          echo "ERROR: You must type 'DESTROY' to confirm stack deletion."
+          echo "You entered: '${{ inputs.confirm }}'"
+          exit 1
+
+  destroy:
+    name: Destroy Stack
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 20
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Get AWS Account ID
+        id: aws
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
+
+      - name: Check if stack exists
+        id: check
+        run: |
+          if aws cloudformation describe-stacks \
+            --region "${{ secrets.AWS_REGION }}" \
+            --stack-name "${{ inputs.stack_name }}" &>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Stack '${{ inputs.stack_name }}' exists, will delete."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Stack '${{ inputs.stack_name }}' does not exist."
+          fi
+
+      - name: Delete CloudFormation stack
+        if: steps.check.outputs.exists == 'true'
+        run: |
+          echo "Deleting CloudFormation stack: ${{ inputs.stack_name }}"
+          echo "This may take several minutes..."
+
+          aws cloudformation delete-stack \
+            --region "${{ secrets.AWS_REGION }}" \
+            --stack-name "${{ inputs.stack_name }}"
+
+          echo "Waiting for stack deletion to complete..."
+          aws cloudformation wait stack-delete-complete \
+            --region "${{ secrets.AWS_REGION }}" \
+            --stack-name "${{ inputs.stack_name }}"
+
+          echo "Stack deleted successfully."
+
+      - name: Delete S3 bucket
+        if: ${{ !inputs.keep_s3 }}
+        run: |
+          BUCKET="${{ inputs.stack_name }}-lambda-${{ steps.aws.outputs.account_id }}-${{ secrets.AWS_REGION }}"
+
+          if aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+            echo "Deleting S3 bucket: $BUCKET"
+            aws s3 rb "s3://$BUCKET" --force
+            echo "S3 bucket deleted."
+          else
+            echo "S3 bucket does not exist: $BUCKET"
+          fi
+
+      - name: Verify cleanup
+        run: |
+          echo "Verifying resource cleanup..."
+
+          # Check CloudFormation stack
+          if aws cloudformation describe-stacks \
+            --region "${{ secrets.AWS_REGION }}" \
+            --stack-name "${{ inputs.stack_name }}" &>/dev/null; then
+            echo "WARNING: Stack still exists!"
+          else
+            echo "CloudFormation stack: DELETED"
+          fi
+
+          # Check SageMaker endpoints
+          ENDPOINTS=$(aws sagemaker list-endpoints \
+            --region "${{ secrets.AWS_REGION }}" \
+            --query "Endpoints[?contains(EndpointName, '${{ inputs.stack_name }}')].EndpointName" \
+            --output text)
+          if [ -z "$ENDPOINTS" ]; then
+            echo "SageMaker endpoints: DELETED"
+          else
+            echo "WARNING: SageMaker endpoints still exist: $ENDPOINTS"
+          fi
+
+          # Check Lambda functions
+          LAMBDAS=$(aws lambda list-functions \
+            --region "${{ secrets.AWS_REGION }}" \
+            --query "Functions[?contains(FunctionName, '${{ inputs.stack_name }}')].FunctionName" \
+            --output text)
+          if [ -z "$LAMBDAS" ]; then
+            echo "Lambda functions: DELETED"
+          else
+            echo "WARNING: Lambda functions still exist: $LAMBDAS"
+          fi
+
+          # Check API Gateways
+          APIS=$(aws apigatewayv2 get-apis \
+            --region "${{ secrets.AWS_REGION }}" \
+            --query "Items[?contains(Name, '${{ inputs.stack_name }}')].Name" \
+            --output text)
+          if [ -z "$APIS" ]; then
+            echo "API Gateways: DELETED"
+          else
+            echo "WARNING: API Gateways still exist: $APIS"
+          fi
+
+          echo "Cleanup verification complete."
+
+      - name: Destruction Summary
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## Stack Destroyed
+
+          | Item | Status |
+          |------|--------|
+          | Stack Name | \`${{ inputs.stack_name }}\` |
+          | CloudFormation | Deleted |
+          | S3 Bucket | ${{ inputs.keep_s3 && 'Preserved' || 'Deleted' }} |
+
+          ### Resources Deleted
+
+          - SageMaker endpoint, endpoint config, and model
+          - Lambda function
+          - API Gateway HTTP API
+          - EC2 instance and Elastic IP
+          - Security group
+          - IAM roles
+
+          **Billing has stopped for this stack.**
+          EOF

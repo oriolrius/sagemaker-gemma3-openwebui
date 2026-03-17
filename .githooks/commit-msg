@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#
+# Conventional Commits validation using commitizen
+# https://commitizen-tools.github.io/commitizen/
+#
+# This hook validates commit messages against the conventional commits spec.
+# Run `cz commit` for interactive commit creation.
+#
+
+commit_msg_file="$1"
+
+# Use commitizen to validate the commit message
+uv run cz check --commit-msg-file "$commit_msg_file"
