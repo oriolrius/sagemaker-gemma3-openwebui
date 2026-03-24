@@ -156,8 +156,8 @@ jobs:
           - SageMaker endpoint, endpoint config, and model
           - Lambda function
           - API Gateway HTTP API
-          - EC2 instance and Elastic IP
-          - Security group
+          - ECS Fargate service, ALB, and cluster
+          - Security groups
           - IAM roles
 
           **Billing has stopped for this stack.**

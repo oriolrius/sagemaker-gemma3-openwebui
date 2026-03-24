@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Full stack deployment: SageMaker TGI endpoint + API Gateway + Lambda + OpenWebUI on EC2.
+  Full stack deployment: SageMaker TGI endpoint + API Gateway + Lambda + OpenWebUI on Fargate.
   Deploys an OpenAI-compatible API backed by a SageMaker endpoint running HuggingFace TGI.
   Supports integration with existing SageMaker Domain (e.g., sg-finetune) via ExternalSageMakerRoleArn.
 
@@ -40,34 +40,18 @@ Parameters:
     Type: String
     Description: S3 key for Lambda deployment package
 
-  # EC2 Configuration
-  EC2InstanceType:
-    Type: String
-    Default: t3.small
-    Description: EC2 instance type for OpenWebUI
-    AllowedValues:
-      - t3.micro
-      - t3.small
-      - t3.medium
-
-  EC2KeyPair:
-    Type: String
-    Default: ''
-    Description: EC2 Key Pair name for SSH access (optional)
-
   # Network Configuration
   VpcId:
     Type: AWS::EC2::VPC::Id
-    Description: VPC ID for EC2 instance
+    Description: VPC for deployment
 
   SubnetId:
     Type: AWS::EC2::Subnet::Id
-    Description: Subnet ID for EC2 instance (must be public subnet)
+    Description: First public subnet (must be public)
 
-  AllowedSSHCidr:
-    Type: String
-    Default: 0.0.0.0/0
-    Description: CIDR block allowed for SSH access
+  SubnetId2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second public subnet in a different AZ (required for ALB)
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -87,19 +71,13 @@ Metadata:
           - LambdaS3Bucket
           - LambdaS3Key
       - Label:
-          default: EC2 Configuration
-        Parameters:
-          - EC2InstanceType
-          - EC2KeyPair
-      - Label:
           default: Network Configuration
         Parameters:
           - VpcId
           - SubnetId
-          - AllowedSSHCidr
+          - SubnetId2
 
 Conditions:
-  HasKeyPair: !Not [!Equals [!Ref EC2KeyPair, '']]
   UseExternalSageMakerRole: !Not [!Equals [!Ref ExternalSageMakerRoleArn, '']]
   CreateLocalSageMakerRole: !Equals [!Ref ExternalSageMakerRoleArn, '']
 
@@ -278,14 +256,73 @@ Resources:
       SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*'
 
   #############################################
-  # EC2 Resources (OpenWebUI)
+  # ECS / Fargate Resources (OpenWebUI)
   #############################################
 
-  EC2SecurityGroup:
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${AWS::StackName}-cluster'
+
+  OpenWebUILogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}/openwebui'
+      RetentionInDays: 7
+
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-ecs-execution-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  OpenWebUITaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn: HttpApi
+    Properties:
+      Family: !Sub '${AWS::StackName}-openwebui'
+      Cpu: '512'
+      Memory: '1024'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: openwebui
+          Image: ghcr.io/open-webui/open-webui:main
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          Environment:
+            - Name: OPENAI_API_BASE_URL
+              Value: !Sub '${HttpApi.ApiEndpoint}/v1'
+            - Name: OPENAI_API_KEY
+              Value: not-required
+            - Name: WEBUI_AUTH
+              Value: 'false'
+            - Name: ENABLE_OLLAMA_API
+              Value: 'false'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref OpenWebUILogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: openwebui
+
+  ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub '${AWS::StackName}-openwebui-sg'
-      GroupDescription: Security group for OpenWebUI EC2 instance
+      GroupName: !Sub '${AWS::StackName}-alb-sg'
+      GroupDescription: Security group for OpenWebUI ALB
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -293,92 +330,85 @@ Resources:
           ToPort: 80
           CidrIp: 0.0.0.0/0
           Description: HTTP access
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: 0.0.0.0/0
-          Description: HTTPS access
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: !Ref AllowedSSHCidr
-          Description: SSH access
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
           Description: All outbound traffic
 
-  EC2Role:
-    Type: AWS::IAM::Role
+  FargateSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
     Properties:
-      RoleName: !Sub '${AWS::StackName}-ec2-role'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-      Policies:
-        - PolicyName: S3ReadAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                Resource: !Sub 'arn:aws:s3:::${LambdaS3Bucket}/openwebui/*'
+      GroupName: !Sub '${AWS::StackName}-fargate-sg'
+      GroupDescription: Security group for OpenWebUI Fargate tasks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Traffic from ALB
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All outbound traffic
 
-  EC2InstanceProfile:
-    Type: AWS::IAM::InstanceProfile
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      InstanceProfileName: !Sub '${AWS::StackName}-ec2-profile'
-      Roles:
-        - !Ref EC2Role
+      Name: !Sub '${AWS::StackName}-alb'
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Subnets:
+        - !Ref SubnetId
+        - !Ref SubnetId2
 
-  EC2Instance:
-    Type: AWS::EC2::Instance
-    DependsOn: HttpApi
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      InstanceType: !Ref EC2InstanceType
-      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
-      SubnetId: !Ref SubnetId
-      SecurityGroupIds:
-        - !Ref EC2SecurityGroup
-      IamInstanceProfile: !Ref EC2InstanceProfile
-      KeyName: !If [HasKeyPair, !Ref EC2KeyPair, !Ref 'AWS::NoValue']
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-openwebui'
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -ex
+      Name: !Sub '${AWS::StackName}-tg'
+      Port: 8080
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: ip
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
 
-          # Download OpenWebUI files from S3
-          mkdir -p /opt/openwebui
-          cd /opt/openwebui
-
-          aws s3 cp s3://${LambdaS3Bucket}/openwebui/docker-compose.yml .
-          aws s3 cp s3://${LambdaS3Bucket}/openwebui/setup.sh .
-          chmod +x setup.sh
-
-          # Set environment and run setup
-          export OPENAI_API_BASE_URL="${HttpApi.ApiEndpoint}"
-          ./setup.sh
-
-          echo "OpenWebUI deployment complete" > /var/log/openwebui-setup.log
-
-  EC2ElasticIP:
-    Type: AWS::EC2::EIP
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
-      Domain: vpc
-      InstanceId: !Ref EC2Instance
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-openwebui-eip'
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  OpenWebUIService:
+    Type: AWS::ECS::Service
+    DependsOn: ALBListener
+    Properties:
+      ServiceName: !Sub '${AWS::StackName}-openwebui'
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref OpenWebUITaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref FargateSecurityGroup
+          Subnets:
+            - !Ref SubnetId
+            - !Ref SubnetId2
+      LoadBalancers:
+        - ContainerName: openwebui
+          ContainerPort: 8080
+          TargetGroupArn: !Ref ALBTargetGroup
 
 Outputs:
   SageMakerEndpointName:
@@ -404,16 +434,8 @@ Outputs:
     Value: !GetAtt HttpApi.ApiEndpoint
 
   OpenWebUIUrl:
-    Description: OpenWebUI URL
-    Value: !Sub 'http://${EC2ElasticIP}'
-
-  EC2InstanceId:
-    Description: EC2 Instance ID
-    Value: !Ref EC2Instance
-
-  EC2PublicIP:
-    Description: EC2 Public IP (Elastic IP)
-    Value: !Ref EC2ElasticIP
+    Description: OpenWebUI URL (via ALB)
+    Value: !Sub 'http://${ApplicationLoadBalancer.DNSName}'
 
   TestCurlCommand:
     Description: Test the API Gateway directly
@@ -421,7 +443,3 @@ Outputs:
       curl -X POST ${HttpApi.ApiEndpoint}/v1/chat/completions \
         -H "Content-Type: application/json" \
         -d '{"messages": [{"role": "user", "content": "The future of AI is"}], "max_tokens": 50}'
-
-  SSHCommand:
-    Description: SSH command to connect to EC2 instance
-    Value: !Sub 'ssh -i <your-key.pem> ec2-user@${EC2ElasticIP}'

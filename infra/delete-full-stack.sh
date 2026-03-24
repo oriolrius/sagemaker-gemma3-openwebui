@@ -55,7 +55,7 @@ echo ""
 echo "This will delete:"
 echo "  - SageMaker endpoint, config, and model"
 echo "  - API Gateway and Lambda"
-echo "  - EC2 instance and Elastic IP"
+echo "  - ECS Fargate service, ALB, and cluster"
 echo "  - IAM roles"
 if [ "$KEEP_S3" = false ] && [ -n "$AWS_ACCOUNT_ID" ]; then
     echo "  - S3 bucket: $LAMBDA_S3_BUCKET"

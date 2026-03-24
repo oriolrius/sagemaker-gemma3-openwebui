@@ -20,18 +20,10 @@ on:
           - ml.g4dn.xlarge
           - ml.g4dn.2xlarge
         default: 'ml.g5.xlarge'
-      ec2_instance:
-        description: 'EC2 instance type'
-        type: choice
-        options:
-          - t3.micro
-          - t3.small
-          - t3.medium
-        default: 't3.small'
 
 jobs:
   deploy:
-    name: Deploy SageMaker + API Gateway + OpenWebUI
+    name: Deploy SageMaker + API Gateway + OpenWebUI (Fargate)
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -94,14 +86,6 @@ jobs:
             "s3://${{ steps.s3.outputs.bucket }}/lambda/${{ inputs.stack_name }}/lambda-openai-proxy.zip"
           echo "Lambda uploaded to S3"
 
-      - name: Upload OpenWebUI files to S3
-        run: |
-          aws s3 cp openwebui/docker-compose.yml \
-            "s3://${{ steps.s3.outputs.bucket }}/openwebui/docker-compose.yml"
-          aws s3 cp openwebui/setup.sh \
-            "s3://${{ steps.s3.outputs.bucket }}/openwebui/setup.sh"
-          echo "OpenWebUI files uploaded to S3"
-
       - name: Deploy CloudFormation stack
         run: |
           echo "Deploying CloudFormation stack: ${{ inputs.stack_name }}"
@@ -114,9 +98,9 @@ jobs:
             --parameter-overrides \
               HuggingFaceModelId="${{ inputs.model_id }}" \
               SageMakerInstanceType="${{ inputs.sagemaker_instance }}" \
-              EC2InstanceType="${{ inputs.ec2_instance }}" \
               VpcId="${{ secrets.VPC_ID }}" \
               SubnetId="${{ secrets.SUBNET_ID }}" \
+              SubnetId2="${{ secrets.SUBNET_ID_2 }}" \
               LambdaS3Bucket="${{ steps.s3.outputs.bucket }}" \
               LambdaS3Key="lambda/${{ inputs.stack_name }}/lambda-openai-proxy.zip" \
             --capabilities CAPABILITY_NAMED_IAM \
@@ -135,10 +119,10 @@ jobs:
             --query "Stacks[0].Outputs[?OutputKey=='ApiGatewayEndpoint'].OutputValue" \
             --output text)
 
-          EC2_IP=$(aws cloudformation describe-stacks \
+          OPENWEBUI_URL=$(aws cloudformation describe-stacks \
             --region "${{ secrets.AWS_REGION }}" \
             --stack-name "${{ inputs.stack_name }}" \
-            --query "Stacks[0].Outputs[?OutputKey=='EC2PublicIP'].OutputValue" \
+            --query "Stacks[0].Outputs[?OutputKey=='OpenWebUIUrl'].OutputValue" \
             --output text)
 
           ENDPOINT_NAME=$(aws cloudformation describe-stacks \
@@ -148,18 +132,18 @@ jobs:
             --output text)
 
           echo "api_url=$API_URL" >> $GITHUB_OUTPUT
-          echo "ec2_ip=$EC2_IP" >> $GITHUB_OUTPUT
+          echo "openwebui_url=$OPENWEBUI_URL" >> $GITHUB_OUTPUT
           echo "endpoint_name=$ENDPOINT_NAME" >> $GITHUB_OUTPUT
 
           echo "API Gateway: $API_URL"
-          echo "EC2 IP: $EC2_IP"
+          echo "OpenWebUI: $OPENWEBUI_URL"
           echo "SageMaker Endpoint: $ENDPOINT_NAME"
 
       - name: Wait for OpenWebUI to be ready
         run: |
-          echo "Waiting for OpenWebUI to be ready..."
+          echo "Waiting for OpenWebUI Fargate service to be ready..."
           for i in {1..30}; do
-            if curl -sf "http://${{ steps.outputs.outputs.ec2_ip }}" -o /dev/null 2>/dev/null; then
+            if curl -sf "${{ steps.outputs.outputs.openwebui_url }}" -o /dev/null 2>/dev/null; then
               echo "OpenWebUI is ready!"
               exit 0
             fi
@@ -192,14 +176,14 @@ jobs:
           | Stack Name | \`${{ inputs.stack_name }}\` |
           | Model | \`${{ inputs.model_id }}\` |
           | SageMaker Instance | \`${{ inputs.sagemaker_instance }}\` |
-          | EC2 Instance | \`${{ inputs.ec2_instance }}\` |
+          | OpenWebUI | Fargate (ECS) |
 
           ### Endpoints
 
           | Service | URL |
           |---------|-----|
           | API Gateway | ${{ steps.outputs.outputs.api_url }} |
-          | OpenWebUI | http://${{ steps.outputs.outputs.ec2_ip }} |
+          | OpenWebUI | ${{ steps.outputs.outputs.openwebui_url }} |
           | SageMaker Endpoint | \`${{ steps.outputs.outputs.endpoint_name }}\` |
 
           ### Test Commands

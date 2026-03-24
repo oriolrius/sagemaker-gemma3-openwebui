@@ -1,17 +1,17 @@
 #!/bin/bash
-# Deploy full stack: SageMaker TGI + API Gateway + Lambda + OpenWebUI on EC2
+# Deploy full stack: SageMaker TGI + API Gateway + Lambda + OpenWebUI on Fargate
 #
 # Usage:
-#   ./deploy-full-stack.sh --vpc-id vpc-xxx --subnet-id subnet-xxx [options]
+#   ./deploy-full-stack.sh --vpc-id vpc-xxx --subnet-id subnet-xxx --subnet-id-2 subnet-yyy [options]
 #
 # Required:
-#   --vpc-id        VPC ID for EC2 instance
-#   --subnet-id     Subnet ID for EC2 instance (must be public)
+#   --vpc-id        VPC ID for deployment
+#   --subnet-id     First public subnet ID
+#   --subnet-id-2   Second public subnet ID (different AZ, required for ALB)
 #
 # Optional:
 #   --stack-name    CloudFormation stack name (default: openai-sagemaker-stack)
 #   --model-id      HuggingFace model ID (default: oriolrius/myemoji-gemma-3-270m-it)
-#   --key-pair      EC2 Key Pair name for SSH access
 #   --region        AWS region (default: eu-west-1)
 #   --external-sagemaker-role-arn  Use existing SageMaker role (for Domain integration)
 #
@@ -26,10 +26,9 @@ STACK_NAME="openai-sagemaker-stack"
 MODEL_ID="oriolrius/myemoji-gemma-3-270m-it"
 REGION="${AWS_REGION:-eu-west-1}"
 SAGEMAKER_INSTANCE="ml.g5.xlarge"
-EC2_INSTANCE="t3.small"
-KEY_PAIR=""
 VPC_ID=""
 SUBNET_ID=""
+SUBNET_ID_2=""
 LAMBDA_S3_BUCKET=""
 EXTERNAL_SAGEMAKER_ROLE_ARN=""
 
@@ -52,8 +51,8 @@ while [[ $# -gt 0 ]]; do
             SUBNET_ID="$2"
             shift 2
             ;;
-        --key-pair)
-            KEY_PAIR="$2"
+        --subnet-id-2)
+            SUBNET_ID_2="$2"
             shift 2
             ;;
         --region)
@@ -62,10 +61,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --sagemaker-instance)
             SAGEMAKER_INSTANCE="$2"
-            shift 2
-            ;;
-        --ec2-instance)
-            EC2_INSTANCE="$2"
             shift 2
             ;;
         --lambda-s3-bucket)
@@ -77,19 +72,18 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -h|--help)
-            echo "Usage: $0 --vpc-id vpc-xxx --subnet-id subnet-xxx [options]"
+            echo "Usage: $0 --vpc-id vpc-xxx --subnet-id subnet-xxx --subnet-id-2 subnet-yyy [options]"
             echo ""
             echo "Required:"
-            echo "  --vpc-id              VPC ID for EC2 instance"
-            echo "  --subnet-id           Subnet ID (must be public subnet)"
+            echo "  --vpc-id              VPC ID for deployment"
+            echo "  --subnet-id           First public subnet ID"
+            echo "  --subnet-id-2         Second public subnet ID (different AZ, required for ALB)"
             echo ""
             echo "Optional:"
             echo "  --stack-name          Stack name (default: openai-sagemaker-stack)"
             echo "  --model-id            HuggingFace model (default: oriolrius/myemoji-gemma-3-270m-it)"
-            echo "  --key-pair            EC2 Key Pair for SSH"
             echo "  --region              AWS region (default: eu-west-1)"
             echo "  --sagemaker-instance  SageMaker instance (default: ml.g5.xlarge)"
-            echo "  --ec2-instance        EC2 instance (default: t3.small)"
             echo "  --lambda-s3-bucket    S3 bucket for Lambda code (auto-created if not specified)"
             echo "  --external-sagemaker-role-arn  Use existing SageMaker role (for Domain integration)"
             exit 0
@@ -118,6 +112,14 @@ if [ -z "$SUBNET_ID" ]; then
     exit 1
 fi
 
+if [ -z "$SUBNET_ID_2" ]; then
+    echo "ERROR: --subnet-id-2 is required (ALB requires two subnets in different AZs)"
+    echo ""
+    echo "Find public subnets in your VPC with:"
+    echo "  aws ec2 describe-subnets --region $REGION --filters Name=vpc-id,Values=$VPC_ID --query 'Subnets[?MapPublicIpOnLaunch==\`true\`].[SubnetId,AvailabilityZone]' --output table"
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "============================================"
@@ -127,10 +129,9 @@ echo "Stack Name:         $STACK_NAME"
 echo "Region:             $REGION"
 echo "Model:              $MODEL_ID"
 echo "SageMaker Instance: $SAGEMAKER_INSTANCE"
-echo "EC2 Instance:       $EC2_INSTANCE"
 echo "VPC ID:             $VPC_ID"
 echo "Subnet ID:          $SUBNET_ID"
-echo "Key Pair:           ${KEY_PAIR:-<none>}"
+echo "Subnet ID 2:        $SUBNET_ID_2"
 if [ -n "$EXTERNAL_SAGEMAKER_ROLE_ARN" ]; then
     echo "Integration Mode:   INTEGRATED (using external SageMaker role)"
     echo "External Role:      $EXTERNAL_SAGEMAKER_ROLE_ARN"
@@ -142,7 +143,7 @@ echo ""
 echo "This will create:"
 echo "  - SageMaker endpoint (~15-20 min to start)"
 echo "  - API Gateway + Lambda"
-echo "  - EC2 instance with OpenWebUI"
+echo "  - ECS Fargate service with OpenWebUI + ALB"
 echo ""
 echo "Estimated cost: ~\$0.80/hour (mostly SageMaker GPU)"
 echo ""
@@ -221,31 +222,15 @@ aws s3 cp "$BUILD_DIR/$LAMBDA_ZIP" "s3://$LAMBDA_S3_BUCKET/$LAMBDA_S3_KEY" --reg
 echo "Lambda uploaded to: s3://$LAMBDA_S3_BUCKET/$LAMBDA_S3_KEY"
 
 #############################################
-# Upload OpenWebUI Files to S3
-#############################################
-OPENWEBUI_DIR="$SCRIPT_DIR/../openwebui"
-
-echo ""
-echo "Uploading OpenWebUI files to S3..."
-aws s3 cp "$OPENWEBUI_DIR/docker-compose.yml" "s3://$LAMBDA_S3_BUCKET/openwebui/docker-compose.yml" --region "$REGION"
-aws s3 cp "$OPENWEBUI_DIR/setup.sh" "s3://$LAMBDA_S3_BUCKET/openwebui/setup.sh" --region "$REGION"
-
-echo "OpenWebUI files uploaded to: s3://$LAMBDA_S3_BUCKET/openwebui/"
-
-#############################################
 # Build CloudFormation Parameters
 #############################################
 PARAMS="HuggingFaceModelId=$MODEL_ID"
 PARAMS="$PARAMS SageMakerInstanceType=$SAGEMAKER_INSTANCE"
-PARAMS="$PARAMS EC2InstanceType=$EC2_INSTANCE"
 PARAMS="$PARAMS VpcId=$VPC_ID"
 PARAMS="$PARAMS SubnetId=$SUBNET_ID"
+PARAMS="$PARAMS SubnetId2=$SUBNET_ID_2"
 PARAMS="$PARAMS LambdaS3Bucket=$LAMBDA_S3_BUCKET"
 PARAMS="$PARAMS LambdaS3Key=$LAMBDA_S3_KEY"
-
-if [ -n "$KEY_PAIR" ]; then
-    PARAMS="$PARAMS EC2KeyPair=$KEY_PAIR"
-fi
 
 if [ -n "$EXTERNAL_SAGEMAKER_ROLE_ARN" ]; then
     PARAMS="$PARAMS ExternalSageMakerRoleArn=$EXTERNAL_SAGEMAKER_ROLE_ARN"
@@ -281,12 +266,6 @@ OPENWEBUI_URL=$(aws cloudformation describe-stacks \
     --query "Stacks[0].Outputs[?OutputKey=='OpenWebUIUrl'].OutputValue" \
     --output text)
 
-EC2_IP=$(aws cloudformation describe-stacks \
-    --region "$REGION" \
-    --stack-name "$STACK_NAME" \
-    --query "Stacks[0].Outputs[?OutputKey=='EC2PublicIP'].OutputValue" \
-    --output text)
-
 ENDPOINT_NAME=$(aws cloudformation describe-stacks \
     --region "$REGION" \
     --stack-name "$STACK_NAME" \
@@ -301,7 +280,6 @@ echo ""
 echo "SageMaker Endpoint: $ENDPOINT_NAME"
 echo "API Gateway:        $API_ENDPOINT"
 echo "OpenWebUI:          $OPENWEBUI_URL"
-echo "EC2 Public IP:      $EC2_IP"
 echo ""
 echo "============================================"
 echo "Test Commands"
@@ -318,11 +296,6 @@ echo ""
 echo "# Open WebUI in browser:"
 echo "open $OPENWEBUI_URL"
 echo ""
-if [ -n "$KEY_PAIR" ]; then
-    echo "# SSH to EC2:"
-    echo "ssh -i ~/.ssh/$KEY_PAIR.pem ec2-user@$EC2_IP"
-    echo ""
-fi
 echo "============================================"
 echo "Cleanup"
 echo "============================================"
