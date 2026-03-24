@@ -7,13 +7,14 @@ Deploy a HuggingFace model on AWS SageMaker with HuggingFace TGI (Text Generatio
 ![Architecture Diagram](docs/architecture.png)
 
 ```
-+-----------+     +--------------+     +----------+     +-----------------+
-| OpenWebUI |---->| API Gateway  |---->|  Lambda  |---->| SageMaker TGI   |
-| (EC2)     |     | (HTTP API)   |     |  (proxy) |     |   Endpoint      |
-+-----------+     +--------------+     +----------+     +-----------------+
-     ^                    ^
-     |                    |
-     +-- Browser ---------+-- API Clients (curl, Python, etc.)
++-------------+     +--------------+     +----------+     +-----------------+
+| OpenWebUI   |---->| API Gateway  |---->|  Lambda  |---->| SageMaker TGI   |
+| (Fargate)   |     | (HTTP API)   |     |  (proxy) |     |   Endpoint      |
++------+------+     +--------------+     +----------+     +-----------------+
+       |                    ^
+  ALB (port 80)             |
+       |                    |
+       +-- Browser ---------+-- API Clients (curl, Python, etc.)
 ```
 
 ### Components
@@ -23,7 +24,7 @@ Deploy a HuggingFace model on AWS SageMaker with HuggingFace TGI (Text Generatio
 | **SageMaker Endpoint** | Runs HuggingFace TGI with your model on GPU (ml.g5.xlarge, NVIDIA A10G) |
 | **Lambda** | Proxies OpenAI-format requests to SageMaker TGI format (handles SigV4 signing) |
 | **API Gateway** | Public HTTP API (OpenAI-compatible: `/v1/chat/completions`, `/v1/models`) |
-| **EC2 + OpenWebUI** | Web-based chat interface |
+| **ECS Fargate + ALB** | Web-based chat interface (OpenWebUI) running as a managed container |
 
 ### Default Model
 
@@ -34,7 +35,7 @@ The default model is **[oriolrius/myemoji-gemma-3-270m-it](https://huggingface.c
 ### Prerequisites
 
 - AWS CLI configured with credentials
-- VPC with a public subnet
+- VPC with **two public subnets in different AZs** (required for ALB)
 - GPU quota for ml.g5.xlarge (check Service Quotas)
 - [uv](https://github.com/astral-sh/uv) (Python package manager) for Lambda packaging
 
@@ -43,7 +44,7 @@ The default model is **[oriolrius/myemoji-gemma-3-270m-it](https://huggingface.c
 ```bash
 cd infra/
 
-# Find your VPC and subnet
+# Find your VPC and subnets
 aws ec2 describe-vpcs --region eu-west-1 \
   --query 'Vpcs[*].[VpcId,Tags[?Key==`Name`].Value|[0]]' --output table
 
@@ -51,10 +52,11 @@ aws ec2 describe-subnets --region eu-west-1 \
   --filters Name=vpc-id,Values=<vpc-id> \
   --query 'Subnets[?MapPublicIpOnLaunch==`true`].[SubnetId,AvailabilityZone]' --output table
 
-# Deploy full stack
+# Deploy full stack (requires 2 subnets in different AZs)
 ./deploy-full-stack.sh \
-  --vpc-id vpc-0123456789abcdef0 \
-  --subnet-id subnet-0123456789abcdef0
+  --vpc-id vpc-xxx \
+  --subnet-id subnet-aaa \
+  --subnet-id-2 subnet-bbb
 ```
 
 Deployment takes ~15-20 minutes (mostly SageMaker endpoint startup).
@@ -62,7 +64,7 @@ Deployment takes ~15-20 minutes (mostly SageMaker endpoint startup).
 ### Access
 
 After deployment:
-- **OpenWebUI**: `http://<ec2-elastic-ip>` (shown in output)
+- **OpenWebUI**: `http://<alb-dns-name>` (shown in output)
 - **API**: `https://<api-id>.execute-api.eu-west-1.amazonaws.com`
 
 ### Test API
@@ -90,16 +92,18 @@ cd infra/
 |-----------|---------|-------------|
 | `--model-id` | oriolrius/myemoji-gemma-3-270m-it | HuggingFace model ID |
 | `--sagemaker-instance` | ml.g5.xlarge | GPU instance type (must support bfloat16) |
-| `--ec2-instance` | t3.small | EC2 instance for OpenWebUI |
-| `--key-pair` | - | EC2 key pair for SSH access |
+| `--subnet-id` | (required) | First public subnet |
+| `--subnet-id-2` | (required) | Second public subnet (different AZ, for ALB) |
 | `--stack-name` | openai-sagemaker-stack | CloudFormation stack name |
+| `--external-sagemaker-role-arn` | - | Use existing SageMaker role (for Domain integration) |
 
 ### Example: Deploy a different model
 
 ```bash
 ./deploy-full-stack.sh \
   --vpc-id vpc-xxx \
-  --subnet-id subnet-xxx \
+  --subnet-id subnet-aaa \
+  --subnet-id-2 subnet-bbb \
   --model-id google/gemma-3-1b-it \
   --sagemaker-instance ml.g5.xlarge
 ```
@@ -109,16 +113,15 @@ cd infra/
 | Resource | Type | Cost |
 |----------|------|------|
 | SageMaker | ml.g5.xlarge | ~$1.41/hour |
-| EC2 | t3.small | ~$0.02/hour |
+| Fargate | 0.5 vCPU / 1 GB | ~$0.03/hour |
+| ALB | Application LB | ~$0.02/hour |
 | API Gateway | HTTP API | ~$1/million requests |
 
-**Total**: ~$1.45/hour (~$1,044/month if 24/7)
+**Total**: ~$1.46/hour (~$1,051/month if 24/7)
 
 **Remember to delete resources when not in use!**
 
 ## Inference Runtime
-
-This project uses **HuggingFace TGI** (Text Generation Inference) as the inference runtime on SageMaker:
 
 | Aspect | Value |
 |--------|-------|
@@ -128,12 +131,9 @@ This project uses **HuggingFace TGI** (Text Generation Inference) as the inferen
 | Max input tokens | 1024 |
 | Max total tokens | 2048 |
 
-### Why TGI instead of vLLM?
+### Why TGI?
 
-Gemma 3 requires bfloat16 precision and has a specific architecture that TGI supports natively. The HuggingFace TGI container on SageMaker provides:
-- Native bfloat16 support on A10G GPUs
-- Built-in chat template handling for instruction-tuned models
-- Optimized memory management for the Gemma architecture
+Gemma 3 requires bfloat16 precision and has a specific architecture that TGI supports natively. The HuggingFace TGI container on SageMaker provides native bfloat16 support on A10G GPUs, built-in chat template handling, and optimized memory management.
 
 ## Security
 
@@ -147,38 +147,13 @@ For production, add API Gateway authentication and enable OpenWebUI auth.
 
 ```
 .
-+-- scripts/                     # SageMaker deployment & testing tools
-|   +-- pyproject.toml           # Python project config (uv)
-|   +-- src/sagemaker_tools/
-|   |   +-- deploy_vllm.py       # Deploy SageMaker endpoint (standalone)
-|   |   +-- test_openai_endpoint.py  # Test endpoint directly
-|   |   +-- test_api_gateway.py  # Test API Gateway
-|   |   +-- cleanup.py           # Delete SageMaker resources
-|   +-- README.md
-+-- lambda/
-|   +-- openai-proxy/            # Lambda function source
-|       +-- pyproject.toml       # Python project config (uv)
-|       +-- src/
-|       |   +-- index.py         # Lambda entry point
-|       |   +-- openai_proxy/
-|       |       +-- handler.py   # Request handlers (TGI format)
-|       +-- tests/
-|           +-- test_handler.py  # Unit tests
-+-- openwebui/                   # OpenWebUI configuration
-|   +-- docker-compose.yml       # Docker Compose config
-|   +-- setup.sh                 # Setup script
-|   +-- README.md
-+-- infra/
-|   +-- full-stack.yaml          # CloudFormation template (TGI)
-|   +-- deploy-full-stack.sh     # Deployment script
-|   +-- delete-full-stack.sh     # Cleanup script
-|   +-- README.md
-+-- docs/
-|   +-- architecture.drawio      # Architecture diagram (editable)
-|   +-- architecture.png         # Architecture diagram (rendered)
-|   +-- sagemaker_quotas.md      # Instance quotas and pricing
-+-- cookbook.md                   # Step-by-step deployment guide
-+-- README.md                    # This file
++-- infra/                      # CloudFormation IaC + deploy/delete scripts
++-- lambda/openai-proxy/        # Lambda function (OpenAI -> SageMaker proxy)
++-- scripts/                    # Standalone CLI tools (test, deploy, cleanup)
++-- openwebui/                  # Local dev config (Fargate uses inline config)
++-- .github/workflows/          # CI/CD (deploy + destroy)
++-- docs/                       # Architecture diagram + SageMaker quotas
++-- cookbook.md                  # Step-by-step deployment guide
 ```
 
 ## Development
@@ -188,43 +163,25 @@ For production, add API Gateway authentication and enable OpenWebUI auth.
 ```bash
 cd lambda/openai-proxy
 uv sync --dev
-
-# Run tests
 uv run pytest -v
-
-# Lint
 uv run ruff check src/ tests/
 ```
 
 ### Scripts (SageMaker Tools)
 
-Standalone Python tools for deploying and testing SageMaker endpoints:
-
 ```bash
 cd scripts/
 uv sync
-
-# Test endpoint directly
 uv run test-endpoint <endpoint-name>
-
-# Test API Gateway
-uv run python -m sagemaker_tools.test_api_gateway https://abc123.execute-api.eu-west-1.amazonaws.com
-
-# Cleanup
-uv run cleanup <endpoint-name>
 ```
 
 ### OpenWebUI (Local)
-
-Run OpenWebUI locally (without CloudFormation):
 
 ```bash
 cd openwebui/
 cp .env.example .env
 # Edit .env and set OPENAI_API_BASE_URL
-
-./setup.sh
-# Or: docker-compose up -d
+docker-compose up -d
 ```
 
 ## License

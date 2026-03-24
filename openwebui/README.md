@@ -58,23 +58,16 @@ Data is stored in `./data/` directory:
 - SQLite database (users, chats, settings)
 - Uploaded files
 
-## CloudFormation Integration
+## CloudFormation / Fargate Integration
 
-The CloudFormation template (`infra/full-stack.yaml`) uses this configuration via EC2 UserData. It:
+In production, the CloudFormation template (`infra/full-stack.yaml`) runs OpenWebUI as a **Fargate task** behind an ALB. The container configuration is defined inline in the template (not from these files). These files are for **local development only**.
 
-1. Downloads `docker-compose.yml` and `setup.sh` to the EC2 instance
-2. Sets `OPENAI_API_BASE_URL` to the API Gateway endpoint
-3. Runs `setup.sh` to start OpenWebUI
+Fargate container settings: `OPENAI_API_BASE_URL=${HttpApi.ApiEndpoint}/v1`, `WEBUI_AUTH=false`, `ENABLE_OLLAMA_API=false`, 512 CPU / 1024 MB memory.
 
 ## Production Notes
 
 For production use:
 
-1. Enable authentication:
-   ```
-   WEBUI_AUTH=true
-   ```
-
-2. Use HTTPS with a custom domain and SSL certificate
-
-3. Consider using EFS for data persistence across instances
+1. Enable authentication: set `WEBUI_AUTH=true` in the task definition
+2. Use HTTPS with a custom domain + ACM certificate on the ALB
+3. Add EFS volume for data persistence across Fargate task restarts
