@@ -10,7 +10,7 @@
 4. **Run tests before deploying:** `cd lambda/openai-proxy && uv sync --dev && uv run pytest -v`
 5. **CloudFormation only.** Never manually create AWS resources.
 6. **Always clean up.** SageMaker GPU costs ~$1.41/hr.
-7. **Conventional Commits** validated by `.githooks/commit-msg` via commitizen. Use `uvx cz commit`.
+7. **Conventional Commits** validated by `.githooks/commit-msg` via commitizen. Use `uvx --from commitizen cz commit`.
 8. **Ruff** for linting/formatting. Line length 120. Python 3.11+.
 
 ## Architecture
@@ -25,4 +25,4 @@ Gemma 3 requires **bfloat16** — only Ampere+ GPUs (g5: A10G). T4/g4dn does NOT
 
 ## Releases
 
-Use `uvx cz bump` for version bumps, `gh release create <tag> --generate-notes` for GitHub releases (account: `oriolrius`).
+Use `uvx --from commitizen cz bump` for version bumps, `gh release create <tag> --generate-notes` for GitHub releases (account: `oriolrius`).
