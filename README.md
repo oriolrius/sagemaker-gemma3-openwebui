@@ -90,11 +90,13 @@ cd infra/
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--model-id` | oriolrius/myemoji-gemma-3-270m-it | HuggingFace model ID |
-| `--sagemaker-instance` | ml.g5.xlarge | GPU instance type (must support bfloat16) |
+| `--vpc-id` | (required) | VPC ID |
 | `--subnet-id` | (required) | First public subnet |
 | `--subnet-id-2` | (required) | Second public subnet (different AZ, for ALB) |
+| `--model-id` | oriolrius/myemoji-gemma-3-270m-it | HuggingFace model ID |
+| `--sagemaker-instance` | ml.g5.xlarge | GPU instance type (must support bfloat16) |
 | `--stack-name` | openai-sagemaker-stack | CloudFormation stack name |
+| `--region` | eu-west-1 | AWS region |
 | `--external-sagemaker-role-arn` | - | Use existing SageMaker role (for Domain integration) |
 
 ### Example: Deploy a different model
@@ -153,7 +155,9 @@ For production, add API Gateway authentication and enable OpenWebUI auth.
 +-- openwebui/                  # Local dev config (Fargate uses inline config)
 +-- .github/workflows/          # CI/CD (deploy + destroy)
 +-- docs/                       # Architecture diagram + SageMaker quotas
-+-- cookbook.md                  # Step-by-step deployment guide
++-- .githooks/                   # Commit message validation (commitizen)
++-- pyproject.toml               # Root project (commitizen + ruff config)
++-- cookbook.md                   # Step-by-step deployment guide
 ```
 
 ## Development

@@ -10,7 +10,7 @@ Browser --> OpenWebUI (Fargate/ALB) --> API Gateway --> Lambda --> SageMaker TGI
 
 **Time required:** ~25-30 minutes (most of it is waiting for SageMaker)
 
-**Cost:** ~$1.45/hour while running. You must delete all resources when done.
+**Cost:** ~$1.46/hour while running. You must delete all resources when done.
 
 ---
 
@@ -69,8 +69,8 @@ All five commands return version numbers. If any command fails, install that too
 Clone this repository and navigate into it. **All commands in this guide are run from the repository root** unless stated otherwise.
 
 ```bash
-git clone https://github.com/oriolrius/sagemaker-using_model.git
-cd sagemaker-using_model
+git clone https://github.com/oriolrius/sagemaker-gemma3-openwebui.git
+cd sagemaker-gemma3-openwebui
 ```
 
 ### Checkpoint
@@ -709,7 +709,7 @@ http://<alb-dns-name>
 
 1. The OpenWebUI interface loads in your browser
 2. Authentication is **disabled** in this setup, so you may go directly to the chat interface
-3. If prompted to create an account, enter any email/password -- this is stored locally on the EC2 instance only
+3. If prompted to create an account, enter any email/password -- this is stored in the Fargate task (ephemeral)
 4. The model **openai-sagemaker-stack-vllm-endpoint** should appear in the model selector
 
 ### Send a Message

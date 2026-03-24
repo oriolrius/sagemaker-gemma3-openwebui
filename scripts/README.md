@@ -9,11 +9,8 @@ Python tools for deploying and testing SageMaker TGI endpoints.
 ```bash
 cd scripts/
 
-# Install with uv
+# Install with uv (always use uv, not pip)
 uv sync
-
-# Or install with pip
-pip install -e .
 ```
 
 ## Usage

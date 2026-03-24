@@ -13,15 +13,20 @@ Deploy the full stack as an independent, self-contained environment. This mode c
 | **Lambda Function** | OpenAI API proxy |
 | **Lambda Execution Role** | IAM role for Lambda |
 | **API Gateway HTTP API** | Public API endpoint |
-| **EC2 Instance** | OpenWebUI host |
-| **EC2 Security Group** | Network rules for EC2 |
-| **EC2 IAM Role** | Instance profile for S3 access |
-| **Elastic IP** | Static public IP |
+| **ECS Cluster** | Fargate orchestration |
+| **ECS Task Definition** | OpenWebUI container config (0.5 vCPU / 1 GB) |
+| **ECS Service** | Manages Fargate tasks |
+| **Application Load Balancer** | Internet-facing, port 80, 2 AZs |
+| **ALB Target Group** | Routes to Fargate tasks on port 8080 |
+| **ALB Security Group** | Allows inbound HTTP (port 80) |
+| **Fargate Security Group** | Allows port 8080 from ALB only |
+| **ECS Task Execution Role** | ECR pull + CloudWatch Logs |
+| **CloudWatch Log Group** | `/ecs/<stack>/openwebui`, 7-day retention |
 
 ## Prerequisites
 
 1. **AWS CLI** configured with credentials
-2. **VPC with public subnet** (MapPublicIpOnLaunch=true)
+2. **VPC with 2 public subnets** in different AZs (required for ALB)
 3. **GPU quota** for ml.g5.xlarge (check Service Quotas)
 4. **uv** installed for Lambda packaging
 
@@ -29,8 +34,9 @@ Deploy the full stack as an independent, self-contained environment. This mode c
 
 ```bash
 ./deploy-full-stack.sh \
-  --vpc-id vpc-0123456789abcdef0 \
-  --subnet-id subnet-0123456789abcdef0
+  --vpc-id vpc-xxx \
+  --subnet-id subnet-aaa \
+  --subnet-id-2 subnet-bbb
 ```
 
 ### Optional Parameters
@@ -40,8 +46,6 @@ Deploy the full stack as an independent, self-contained environment. This mode c
 | `--stack-name` | openai-sagemaker-stack | CloudFormation stack name |
 | `--model-id` | oriolrius/myemoji-gemma-3-270m-it | HuggingFace model ID |
 | `--sagemaker-instance` | ml.g5.xlarge | GPU instance type (must support bfloat16) |
-| `--ec2-instance` | t3.small | EC2 instance type |
-| `--key-pair` | - | EC2 key pair for SSH |
 | `--region` | eu-west-1 | AWS region |
 
 ## When to Use Standalone Mode
@@ -67,9 +71,9 @@ This deletes all resources including the SageMaker execution role.
                      │                                                         │
 ┌─────────┐         │  ┌──────────┐    ┌────────┐    ┌─────────────────────┐  │
 │ Browser │─────────┼─▶│ OpenWebUI│───▶│  API   │───▶│      Lambda         │  │
-└─────────┘         │  │  (EC2)   │    │Gateway │    │   (OpenAI Proxy)    │  │
-                     │  └──────────┘    └────────┘    └──────────┬──────────┘  │
-                     │                                           │             │
+└─────────┘         │  │(Fargate/ │    │Gateway │    │   (OpenAI Proxy)    │  │
+                     │  │   ALB)   │    └────────┘    └──────────┬──────────┘  │
+                     │  └──────────┘                             │             │
                      │                                           ▼             │
                      │                               ┌─────────────────────┐   │
                      │                               │  SageMaker Endpoint │   │

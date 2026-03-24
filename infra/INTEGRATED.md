@@ -10,7 +10,7 @@ This mode **requires** pre-existing SageMaker infrastructure:
 |----------|----------|------------|
 | **SageMaker Domain** | Yes | External (e.g., sg-finetune, AWS Console) |
 | **SageMaker Execution Role** | Yes | External (same stack as Domain) |
-| **VPC and Subnets** | Yes | External or default VPC |
+| **VPC and 2 Subnets** | Yes | External or default VPC (2 AZs for ALB) |
 
 ### Required Permissions on External Role
 
@@ -41,14 +41,15 @@ The existing SageMaker execution role must have these permissions:
 
 | Resource | Created | Reused |
 |----------|---------|--------|
-| SageMaker Domain | | ✅ |
-| SageMaker Execution Role | | ✅ |
-| SageMaker Model | ✅ | |
-| SageMaker Endpoint Config | ✅ | |
-| SageMaker Endpoint | ✅ | |
-| Lambda Function + Role | ✅ | |
-| API Gateway | ✅ | |
-| EC2 + Security Group | ✅ | |
+| SageMaker Domain | | reused |
+| SageMaker Execution Role | | reused |
+| SageMaker Model | created | |
+| SageMaker Endpoint Config | created | |
+| SageMaker Endpoint | created | |
+| Lambda Function + Role | created | |
+| API Gateway | created | |
+| ECS Cluster + Fargate Service | created | |
+| ALB + Security Groups | created | |
 
 ## Deploy
 
@@ -71,13 +72,13 @@ echo $ROLE_ARN
 # arn:aws:iam::123456789012:role/sg-finetune-sagemaker-execution-role
 ```
 
-### Step 2: Get VPC and Subnet from Domain
+### Step 2: Get VPC and Subnets from Domain
 
 ```bash
 # Get Domain's VPC and Subnets (recommended for consistency)
 aws sagemaker describe-domain \
   --domain-id d-xxxxxxxxxx \
-  --query '[VpcId, SubnetIds[0]]' \
+  --query '[VpcId, SubnetIds[0:2]]' \
   --output text
 ```
 
@@ -85,8 +86,9 @@ aws sagemaker describe-domain \
 
 ```bash
 ./deploy-full-stack.sh \
-  --vpc-id vpc-0123456789abcdef0 \
-  --subnet-id subnet-0123456789abcdef0 \
+  --vpc-id vpc-xxx \
+  --subnet-id subnet-aaa \
+  --subnet-id-2 subnet-bbb \
   --external-sagemaker-role-arn "$ROLE_ARN" \
   --stack-name openai-sagemaker-integrated
 ```
@@ -97,32 +99,8 @@ aws sagemaker describe-domain \
 - **SageMaker Studio** - Endpoint visible in Studio UI
 - **Existing Domain** - Leverage existing infrastructure
 - **Cost tracking** - Consolidated under same role/project
-- **Team environments** - Shared SageMaker Domain
-
-## Example: Integration with sg-finetune
-
-The [sg-finetune](https://github.com/oriolrius/sg-finetune) project provides a SageMaker Domain with training pipelines. To deploy inference alongside it:
-
-```bash
-# Get role from sg-finetune stack
-ROLE_ARN=$(aws cloudformation describe-stacks \
-  --stack-name sg-finetune-sagemaker-domain \
-  --region eu-west-1 \
-  --query 'Stacks[0].Outputs[?OutputKey==`ExecutionRoleArn`].OutputValue' \
-  --output text)
-
-# Deploy integrated
-./deploy-full-stack.sh \
-  --vpc-id vpc-0496b1fd0ee93bda5 \
-  --subnet-id subnet-0be946f5bcf8899a1 \
-  --external-sagemaker-role-arn "$ROLE_ARN" \
-  --stack-name openai-sagemaker-integrated \
-  --region eu-west-1
-```
 
 ## Verifying Integration
-
-After deployment, check the outputs:
 
 ```bash
 aws cloudformation describe-stacks \
@@ -158,9 +136,9 @@ aws cloudformation describe-stacks \
         │                              ▼                                      │
         │  ┌──────────┐    ┌────────┐    ┌────────┐    ┌─────────────────┐   │
         │  │ OpenWebUI│───▶│  API   │───▶│ Lambda │───▶│  SageMaker TGI  │   │
-        │  │  (EC2)   │    │Gateway │    │        │    │    Endpoint     │   │
-        │  └──────────┘    └────────┘    └────────┘    └─────────────────┘   │
-        │                                                       │             │
+        │  │(Fargate/ │    │Gateway │    │        │    │    Endpoint     │   │
+        │  │   ALB)   │    └────────┘    └────────┘    └─────────────────┘   │
+        │  └──────────┘                                        │             │
         │                                              Uses external role     │
         └──────────────────────────────────────────────────────────────────────┘
 ```
