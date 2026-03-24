@@ -29,11 +29,11 @@ Use **commitizen** for version bumps and **`gh` CLI** (GitHub account: `oriolriu
 
 ```bash
 # 1. Bump version (updates all 3 pyproject.toml + creates git tag)
-cz bump              # auto-detects bump type from commits (feat=MINOR, fix=PATCH, feat!=MAJOR)
+uvx cz bump              # auto-detects bump type from commits (feat=MINOR, fix=PATCH, feat!=MAJOR)
 # or force a specific bump:
-cz bump --increment MAJOR   # for breaking changes
-cz bump --increment MINOR   # for new features
-cz bump --increment PATCH   # for bug fixes
+uvx cz bump --increment MAJOR   # for breaking changes
+uvx cz bump --increment MINOR   # for new features
+uvx cz bump --increment PATCH   # for bug fixes
 
 # 2. Push commits + tag
 git push origin main --tags
