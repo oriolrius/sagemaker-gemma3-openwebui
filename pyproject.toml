@@ -1,6 +1,6 @@
 [project]
 name = "sagemaker-gemma3-openwebui"
-version = "2.0.0"
+version = "2.0.1"
 description = "AWS SageMaker TGI deployment with OpenAI-compatible API and OpenWebUI"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,7 +14,7 @@ dev = [
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "2.0.0"
+version = "2.0.1"
 version_files = [
     "pyproject.toml:^version",
     "lambda/openai-proxy/pyproject.toml:^version",
