@@ -69,8 +69,8 @@ All five commands return version numbers. If any command fails, install that too
 Clone this repository and navigate into it. **All commands in this guide are run from the repository root** unless stated otherwise.
 
 ```bash
-git clone https://github.com/oriolrius/sagemaker-using_model.git
-cd sagemaker-using_model
+git clone https://github.com/oriolrius/sagemaker-gemma3-openwebui.git
+cd sagemaker-gemma3-openwebui
 ```
 
 ### Checkpoint

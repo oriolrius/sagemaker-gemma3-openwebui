@@ -88,11 +88,14 @@ cd infra/
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
+| `--vpc-id` | (required) | VPC ID |
+| `--subnet-id` | (required) | Public subnet ID |
 | `--model-id` | oriolrius/myemoji-gemma-3-270m-it | HuggingFace model ID |
 | `--sagemaker-instance` | ml.g5.xlarge | GPU instance type (must support bfloat16) |
 | `--ec2-instance` | t3.small | EC2 instance for OpenWebUI |
 | `--key-pair` | - | EC2 key pair for SSH access |
 | `--stack-name` | openai-sagemaker-stack | CloudFormation stack name |
+| `--region` | eu-west-1 | AWS region |
 
 ### Example: Deploy a different model
 
@@ -147,38 +150,15 @@ For production, add API Gateway authentication and enable OpenWebUI auth.
 
 ```
 .
-+-- scripts/                     # SageMaker deployment & testing tools
-|   +-- pyproject.toml           # Python project config (uv)
-|   +-- src/sagemaker_tools/
-|   |   +-- deploy_vllm.py       # Deploy SageMaker endpoint (standalone)
-|   |   +-- test_openai_endpoint.py  # Test endpoint directly
-|   |   +-- test_api_gateway.py  # Test API Gateway
-|   |   +-- cleanup.py           # Delete SageMaker resources
-|   +-- README.md
-+-- lambda/
-|   +-- openai-proxy/            # Lambda function source
-|       +-- pyproject.toml       # Python project config (uv)
-|       +-- src/
-|       |   +-- index.py         # Lambda entry point
-|       |   +-- openai_proxy/
-|       |       +-- handler.py   # Request handlers (TGI format)
-|       +-- tests/
-|           +-- test_handler.py  # Unit tests
-+-- openwebui/                   # OpenWebUI configuration
-|   +-- docker-compose.yml       # Docker Compose config
-|   +-- setup.sh                 # Setup script
-|   +-- README.md
-+-- infra/
-|   +-- full-stack.yaml          # CloudFormation template (TGI)
-|   +-- deploy-full-stack.sh     # Deployment script
-|   +-- delete-full-stack.sh     # Cleanup script
-|   +-- README.md
-+-- docs/
-|   +-- architecture.drawio      # Architecture diagram (editable)
-|   +-- architecture.png         # Architecture diagram (rendered)
-|   +-- sagemaker_quotas.md      # Instance quotas and pricing
++-- infra/                       # CloudFormation IaC + deploy/delete scripts
++-- lambda/openai-proxy/         # Lambda function (OpenAI -> SageMaker proxy)
++-- scripts/                     # Standalone CLI tools (test, deploy, cleanup)
++-- openwebui/                   # OpenWebUI Docker Compose config (EC2 + local dev)
++-- .github/workflows/           # CI/CD (deploy + destroy)
++-- docs/                        # Architecture diagram + SageMaker quotas
++-- .githooks/                   # Commit message validation (commitizen)
 +-- cookbook.md                   # Step-by-step deployment guide
-+-- README.md                    # This file
++-- pyproject.toml               # Root project (commitizen + ruff config)
 ```
 
 ## Development
