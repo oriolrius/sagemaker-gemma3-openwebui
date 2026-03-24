@@ -2,16 +2,7 @@
 
 CloudFormation template for deploying a SageMaker TGI endpoint with OpenAI-compatible API and OpenWebUI on Fargate.
 
-## Deployment Modes
-
-| Mode | Use Case | SageMaker Role | Documentation |
-|------|----------|----------------|---------------|
-| **Standalone** | Independent deployment | Created by stack | [STANDALONE.md](STANDALONE.md) |
-| **Integrated** | Within existing SageMaker Domain | Uses external role | [INTEGRATED.md](INTEGRATED.md) |
-
 ## Quick Start
-
-### Standalone (Default)
 
 ```bash
 ./deploy-full-stack.sh \
@@ -20,22 +11,9 @@ CloudFormation template for deploying a SageMaker TGI endpoint with OpenAI-compa
   --subnet-id-2 subnet-bbb
 ```
 
-### Integrated (with existing SageMaker Domain)
-
-```bash
-ROLE_ARN=$(aws sagemaker describe-domain \
-  --domain-id d-xxxxxxxxxx \
-  --query 'DefaultUserSettings.ExecutionRole' \
-  --output text)
-
-./deploy-full-stack.sh \
-  --vpc-id vpc-xxx \
-  --subnet-id subnet-aaa \
-  --subnet-id-2 subnet-bbb \
-  --external-sagemaker-role-arn "$ROLE_ARN"
-```
-
 ## Architecture
+
+See [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) for full architecture description and diagram.
 
 ```
 +--------------+     +--------------+     +----------+     +-----------------+
@@ -51,17 +29,6 @@ ROLE_ARN=$(aws sagemaker describe-domain \
 3. **GPU quota** for ml.g5.xlarge (check [Service Quotas](../docs/sagemaker_quotas.md))
 4. **uv** installed for Lambda packaging
 
-### Find VPC and Subnets
-
-```bash
-aws ec2 describe-vpcs --region eu-west-1 \
-  --query 'Vpcs[*].[VpcId,Tags[?Key==`Name`].Value|[0]]' --output table
-
-aws ec2 describe-subnets --region eu-west-1 \
-  --filters Name=vpc-id,Values=vpc-xxx \
-  --query 'Subnets[?MapPublicIpOnLaunch==`true`].[SubnetId,AvailabilityZone]' --output table
-```
-
 ## Deploy Options
 
 | Flag | Default | Description |
@@ -73,7 +40,6 @@ aws ec2 describe-subnets --region eu-west-1 \
 | `--model-id` | oriolrius/myemoji-gemma-3-270m-it | HuggingFace model ID |
 | `--sagemaker-instance` | ml.g5.xlarge | GPU instance type (must support bfloat16) |
 | `--region` | eu-west-1 | AWS region |
-| `--external-sagemaker-role-arn` | - | Use existing SageMaker role (integrated mode) |
 | `--lambda-s3-bucket` | auto-created | S3 bucket for Lambda artifacts |
 
 ## Outputs
@@ -110,8 +76,6 @@ After deployment:
 | `full-stack.yaml` | CloudFormation template (23 resources) |
 | `deploy-full-stack.sh` | Deploy script |
 | `delete-full-stack.sh` | Cleanup script |
-| `STANDALONE.md` | Standalone deployment guide |
-| `INTEGRATED.md` | SageMaker Domain integration guide |
 
 ## Security Notes
 

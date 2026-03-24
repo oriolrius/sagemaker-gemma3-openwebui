@@ -11,7 +11,7 @@ CloudFormation IaC and deployment scripts.
 ## CloudFormation Parameters
 
 Required: `VpcId`, `SubnetId`, `SubnetId2` (2 public subnets in different AZs for ALB), `LambdaS3Bucket`, `LambdaS3Key`.
-Optional: `HuggingFaceModelId` (default: `oriolrius/myemoji-gemma-3-270m-it`), `SageMakerInstanceType` (default: `ml.g5.xlarge`), `ExternalSageMakerRoleArn` (for Domain integration with sg-finetune).
+Optional: `HuggingFaceModelId` (default: `oriolrius/myemoji-gemma-3-270m-it`), `SageMakerInstanceType` (default: `ml.g5.xlarge`).
 
 ## Resources Created
 
@@ -19,13 +19,13 @@ Optional: `HuggingFaceModelId` (default: `oriolrius/myemoji-gemma-3-270m-it`), `
 - **Lambda**: Function (Python 3.11, 60s timeout, 256MB) + IAM role (sagemaker:InvokeEndpoint only)
 - **API Gateway v2**: HTTP API + 3 routes (`POST /v1/chat/completions`, `POST /v1/completions`, `GET /v1/models`)
 - **ECS Fargate**: Cluster, TaskDef (512 CPU/1024 MB), Service, ALB, TargetGroup, Listener, 2 SecurityGroups, LogGroup
-- **IAM**: SageMaker role (conditional), Lambda role, ECS task execution role (trusts `ecs-tasks.amazonaws.com`)
+- **IAM**: SageMaker role, Lambda role, ECS task execution role (trusts `ecs-tasks.amazonaws.com`)
 
 ## Deploy
 
 ```bash
 ./deploy-full-stack.sh --vpc-id vpc-xxx --subnet-id subnet-xxx --subnet-id-2 subnet-yyy
-# Optional: --stack-name, --model-id, --sagemaker-instance, --external-sagemaker-role-arn
+# Optional: --stack-name, --model-id, --sagemaker-instance
 ```
 
 ## TGI Environment
