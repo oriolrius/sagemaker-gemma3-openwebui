@@ -8,7 +8,7 @@
 Browser -> OpenWebUI (Fargate/ALB) -> API Gateway -> Lambda -> SageMaker TGI (ml.g5.xlarge)
 ```
 
-Single CloudFormation stack deploys up to 23 resources in `eu-west-1` (22 when `ExternalSageMakerRoleArn` is provided). All resources are standalone — no external dependencies.
+Single CloudFormation stack deploys 23 resources in `eu-west-1`. All resources are standalone — no external dependencies.
 
 ## Components
 

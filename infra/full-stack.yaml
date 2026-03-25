@@ -2,7 +2,6 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Full stack deployment: SageMaker TGI endpoint + API Gateway + Lambda + OpenWebUI on Fargate.
   Deploys an OpenAI-compatible API backed by a SageMaker endpoint running HuggingFace TGI.
-  Supports integration with existing SageMaker Domain (e.g., sg-finetune) via ExternalSageMakerRoleArn.
 
 Parameters:
   # Model Configuration
@@ -20,16 +19,6 @@ Parameters:
       - ml.g4dn.2xlarge
       - ml.g5.xlarge
       - ml.g5.2xlarge
-
-  # SageMaker Domain Integration (Optional)
-  ExternalSageMakerRoleArn:
-    Type: String
-    Default: ''
-    Description: >
-      (Optional) ARN of an existing SageMaker execution role from another stack (e.g., sg-finetune).
-      If provided, the endpoint will use this role instead of creating a new one.
-      This enables integration with an existing SageMaker Domain.
-      Example: arn:aws:iam::123456789012:role/sg-finetune-sagemaker-execution-role
 
   # Lambda Configuration
   LambdaS3Bucket:
@@ -62,10 +51,6 @@ Metadata:
           - HuggingFaceModelId
           - SageMakerInstanceType
       - Label:
-          default: SageMaker Domain Integration (Optional)
-        Parameters:
-          - ExternalSageMakerRoleArn
-      - Label:
           default: Lambda Configuration
         Parameters:
           - LambdaS3Bucket
@@ -77,19 +62,13 @@ Metadata:
           - SubnetId
           - SubnetId2
 
-Conditions:
-  UseExternalSageMakerRole: !Not [!Equals [!Ref ExternalSageMakerRoleArn, '']]
-  CreateLocalSageMakerRole: !Equals [!Ref ExternalSageMakerRoleArn, '']
-
 Resources:
   #############################################
   # SageMaker Resources
   #############################################
 
-  # Local execution role - only created if ExternalSageMakerRoleArn is not provided
   SageMakerExecutionRole:
     Type: AWS::IAM::Role
-    Condition: CreateLocalSageMakerRole
     Properties:
       RoleName: !Sub '${AWS::StackName}-sagemaker-role'
       AssumeRolePolicyDocument:
@@ -118,11 +97,7 @@ Resources:
     Type: AWS::SageMaker::Model
     Properties:
       ModelName: !Sub '${AWS::StackName}-vllm-model'
-      # Use external role if provided, otherwise use the local role
-      ExecutionRoleArn: !If
-        - UseExternalSageMakerRole
-        - !Ref ExternalSageMakerRoleArn
-        - !GetAtt SageMakerExecutionRole.Arn
+      ExecutionRoleArn: !GetAtt SageMakerExecutionRole.Arn
       PrimaryContainer:
         Image: !Sub '763104351884.dkr.ecr.${AWS::Region}.amazonaws.com/huggingface-pytorch-tgi-inference:2.7.0-tgi3.3.6-gpu-py311-cu124-ubuntu22.04-v1.0'
         Environment:
@@ -413,20 +388,6 @@ Outputs:
   SageMakerEndpointName:
     Description: SageMaker endpoint name
     Value: !Sub '${AWS::StackName}-vllm-endpoint'
-
-  SageMakerExecutionRoleArn:
-    Description: SageMaker execution role ARN being used
-    Value: !If
-      - UseExternalSageMakerRole
-      - !Ref ExternalSageMakerRoleArn
-      - !GetAtt SageMakerExecutionRole.Arn
-
-  SageMakerIntegrationMode:
-    Description: Whether using external Domain role or standalone
-    Value: !If
-      - UseExternalSageMakerRole
-      - 'Integrated (using external SageMaker Domain role)'
-      - 'Standalone (using locally created role)'
 
   ApiGatewayEndpoint:
     Description: API Gateway endpoint URL

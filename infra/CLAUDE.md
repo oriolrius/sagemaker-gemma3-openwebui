@@ -4,7 +4,7 @@ CloudFormation IaC and deployment scripts.
 
 ## Files
 
-- `full-stack.yaml` — Single CloudFormation template (up to 23 resources; 22 when using external SageMaker role)
+- `full-stack.yaml` — Single CloudFormation template (23 resources)
 - `deploy-full-stack.sh` — Orchestrates: package Lambda -> create S3 -> upload -> deploy CFN -> show outputs
 - `delete-full-stack.sh` — Deletes stack + S3 bucket
 

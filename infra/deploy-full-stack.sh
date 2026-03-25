@@ -13,7 +13,6 @@
 #   --stack-name    CloudFormation stack name (default: openai-sagemaker-stack)
 #   --model-id      HuggingFace model ID (default: oriolrius/myemoji-gemma-3-270m-it)
 #   --region        AWS region (default: eu-west-1)
-#   --external-sagemaker-role-arn  Use existing SageMaker role (for Domain integration)
 #
 # Prerequisites:
 #   - AWS CLI configured with credentials
@@ -30,7 +29,6 @@ VPC_ID=""
 SUBNET_ID=""
 SUBNET_ID_2=""
 LAMBDA_S3_BUCKET=""
-EXTERNAL_SAGEMAKER_ROLE_ARN=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -67,10 +65,6 @@ while [[ $# -gt 0 ]]; do
             LAMBDA_S3_BUCKET="$2"
             shift 2
             ;;
-        --external-sagemaker-role-arn)
-            EXTERNAL_SAGEMAKER_ROLE_ARN="$2"
-            shift 2
-            ;;
         -h|--help)
             echo "Usage: $0 --vpc-id vpc-xxx --subnet-id subnet-xxx --subnet-id-2 subnet-yyy [options]"
             echo ""
@@ -85,7 +79,6 @@ while [[ $# -gt 0 ]]; do
             echo "  --region              AWS region (default: eu-west-1)"
             echo "  --sagemaker-instance  SageMaker instance (default: ml.g5.xlarge)"
             echo "  --lambda-s3-bucket    S3 bucket for Lambda code (auto-created if not specified)"
-            echo "  --external-sagemaker-role-arn  Use existing SageMaker role (for Domain integration)"
             exit 0
             ;;
         *)
@@ -132,12 +125,6 @@ echo "SageMaker Instance: $SAGEMAKER_INSTANCE"
 echo "VPC ID:             $VPC_ID"
 echo "Subnet ID:          $SUBNET_ID"
 echo "Subnet ID 2:        $SUBNET_ID_2"
-if [ -n "$EXTERNAL_SAGEMAKER_ROLE_ARN" ]; then
-    echo "Integration Mode:   INTEGRATED (using external SageMaker role)"
-    echo "External Role:      $EXTERNAL_SAGEMAKER_ROLE_ARN"
-else
-    echo "Integration Mode:   STANDALONE (creating own SageMaker role)"
-fi
 echo "============================================"
 echo ""
 echo "This will create:"
@@ -227,10 +214,6 @@ PARAMS="$PARAMS SubnetId=$SUBNET_ID"
 PARAMS="$PARAMS SubnetId2=$SUBNET_ID_2"
 PARAMS="$PARAMS LambdaS3Bucket=$LAMBDA_S3_BUCKET"
 PARAMS="$PARAMS LambdaS3Key=$LAMBDA_S3_KEY"
-
-if [ -n "$EXTERNAL_SAGEMAKER_ROLE_ARN" ]; then
-    PARAMS="$PARAMS ExternalSageMakerRoleArn=$EXTERNAL_SAGEMAKER_ROLE_ARN"
-fi
 
 # Deploy stack
 echo ""
