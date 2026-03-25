@@ -92,6 +92,35 @@ jobs:
             echo "S3 bucket does not exist: $BUCKET"
           fi
 
+      - name: Clean up orphaned resources
+        run: |
+          echo "Cleaning up orphaned log groups..."
+          aws logs delete-log-group \
+            --log-group-name "/aws/lambda/${{ inputs.stack_name }}-openai-proxy" \
+            --region "${{ secrets.AWS_REGION }}" 2>/dev/null && \
+            echo "  Deleted Lambda log group" || echo "  Lambda log group not found (OK)"
+          aws logs delete-log-group \
+            --log-group-name "/aws/sagemaker/Endpoints/${{ inputs.stack_name }}-vllm-endpoint" \
+            --region "${{ secrets.AWS_REGION }}" 2>/dev/null && \
+            echo "  Deleted SageMaker log group" || echo "  SageMaker log group not found (OK)"
+
+          echo "Deregistering orphaned ECS task definitions..."
+          TASK_DEFS=$(aws ecs list-task-definitions --region "${{ secrets.AWS_REGION }}" \
+            --query "taskDefinitionArns[?contains(@,'${{ inputs.stack_name }}')]" --output text 2>/dev/null || echo "")
+          if [ -n "$TASK_DEFS" ]; then
+            echo "$TASK_DEFS" | tr '\t' '\n' | while read -r td; do
+              aws ecs deregister-task-definition --task-definition "$td" --region "${{ secrets.AWS_REGION }}" \
+                --query 'taskDefinition.taskDefinitionArn' --output text 2>/dev/null
+              echo "  Deregistered: $(basename "$td")"
+            done
+            aws ecs delete-task-definitions --region "${{ secrets.AWS_REGION }}" \
+              --task-definitions $(echo "$TASK_DEFS" | tr '\t' ' ') \
+              --query 'taskDefinitions[].taskDefinitionArn' --output text 2>/dev/null && \
+              echo "  Deleted deregistered task definitions" || true
+          else
+            echo "  No orphaned task definitions found (OK)"
+          fi
+
       - name: Verify cleanup
         run: |
           echo "Verifying resource cleanup..."
@@ -159,6 +188,8 @@ jobs:
           - ECS Fargate service, ALB, and cluster
           - Security groups
           - IAM roles
+          - Orphaned log groups (Lambda, SageMaker)
+          - Orphaned ECS task definitions
 
           **Billing has stopped for this stack.**
           EOF

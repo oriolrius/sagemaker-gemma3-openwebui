@@ -57,6 +57,8 @@ echo "  - SageMaker endpoint, config, and model"
 echo "  - API Gateway and Lambda"
 echo "  - ECS Fargate service, ALB, and cluster"
 echo "  - IAM roles"
+echo "  - Orphaned log groups (Lambda, SageMaker)"
+echo "  - Orphaned ECS task definitions"
 if [ "$KEEP_S3" = false ] && [ -n "$AWS_ACCOUNT_ID" ]; then
     echo "  - S3 bucket: $LAMBDA_S3_BUCKET"
 fi
@@ -97,6 +99,36 @@ if [ "$KEEP_S3" = false ] && [ -n "$AWS_ACCOUNT_ID" ]; then
         aws s3 rb "s3://$LAMBDA_S3_BUCKET" --force --region "$REGION"
         echo "S3 bucket deleted."
     fi
+fi
+
+# Delete orphaned log groups (auto-created by Lambda/SageMaker, not managed by CloudFormation)
+echo ""
+echo "Cleaning up orphaned log groups..."
+aws logs delete-log-group \
+    --log-group-name "/aws/lambda/${STACK_NAME}-openai-proxy" \
+    --region "$REGION" 2>/dev/null && echo "  Deleted Lambda log group" || echo "  Lambda log group not found (OK)"
+aws logs delete-log-group \
+    --log-group-name "/aws/sagemaker/Endpoints/${STACK_NAME}-vllm-endpoint" \
+    --region "$REGION" 2>/dev/null && echo "  Deleted SageMaker log group" || echo "  SageMaker log group not found (OK)"
+
+# Deregister orphaned ECS task definitions (AWS never deletes these automatically)
+echo ""
+echo "Deregistering orphaned ECS task definitions..."
+TASK_DEFS=$(aws ecs list-task-definitions --region "$REGION" \
+    --query "taskDefinitionArns[?contains(@,'${STACK_NAME}')]" --output text 2>/dev/null || echo "")
+if [ -n "$TASK_DEFS" ]; then
+    echo "$TASK_DEFS" | tr '\t' '\n' | while read -r td; do
+        aws ecs deregister-task-definition --task-definition "$td" --region "$REGION" \
+            --query 'taskDefinition.taskDefinitionArn' --output text 2>/dev/null
+        echo "  Deregistered: $(basename "$td")"
+    done
+    # Delete deregistered task definitions
+    aws ecs delete-task-definitions --region "$REGION" \
+        --task-definitions $(echo "$TASK_DEFS" | tr '\t' ' ') \
+        --query 'taskDefinitions[].taskDefinitionArn' --output text 2>/dev/null && \
+        echo "  Deleted deregistered task definitions" || true
+else
+    echo "  No orphaned task definitions found (OK)"
 fi
 
 echo ""
