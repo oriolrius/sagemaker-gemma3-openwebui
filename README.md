@@ -97,6 +97,7 @@ cd infra/
 | `--sagemaker-instance` | ml.g5.xlarge | GPU instance type (must support bfloat16) |
 | `--stack-name` | openai-sagemaker-stack | CloudFormation stack name |
 | `--region` | eu-west-1 | AWS region |
+| `--external-sagemaker-role-arn` | (none) | Use existing SageMaker role (for Domain integration) |
 
 ### Example: Deploy a different model
 

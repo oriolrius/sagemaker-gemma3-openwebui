@@ -537,7 +537,7 @@ Press `Ctrl+C` to stop watching (if using `watch`).
 | 0-1 min | IAM roles created |
 | 1-2 min | API Gateway, Security Group created |
 | 2-3 min | SageMaker Model and Endpoint Config created |
-| 3-5 min | Lambda function created, EC2 instance launched |
+| 3-5 min | Lambda function created, ECS Fargate service starting |
 | 5-20 min | **SageMaker Endpoint: Creating** (pulls container image, downloads model, loads into GPU) |
 | 15-20 min | SageMaker Endpoint transitions to **InService** |
 | 20 min | Stack status: **CREATE_COMPLETE** |
@@ -584,7 +584,6 @@ Common failures and fixes:
 |-----------------|---------------|-----|
 | SageMakerEndpoint | `ResourceLimitExceeded` | GPU quota is 0 -- request increase (Step 4) |
 | LambdaFunction | `S3 error: Access Denied` | S3 bucket region mismatch -- re-run deploy script |
-| EC2Instance | `not supported` | Instance type unavailable in AZ -- the script uses `t3.small` which works in eu-west-1 |
 | Any IAM resource | `Requires capabilities` | Missing `--capabilities` flag -- the deploy script includes this automatically |
 
 After fixing the issue, delete the failed stack and redeploy:
@@ -856,7 +855,6 @@ All five commands return empty results. **No ongoing charges.**
 | SageMaker endpoint not working | `aws sagemaker describe-endpoint --endpoint-name openai-sagemaker-stack-vllm-endpoint --query '[EndpointStatus,FailureReason]'` |
 | SageMaker container errors | `aws logs tail /aws/sagemaker/Endpoints/openai-sagemaker-stack-vllm-endpoint --follow` |
 | Lambda returning 500 errors | `aws logs filter-log-events --log-group-name /aws/lambda/openai-sagemaker-stack-openai-proxy --filter-pattern "ERROR"` |
-| EC2 setup script failed | `aws ec2 get-console-output --instance-id <instance-id> --region eu-west-1 --latest --query 'Output' --output text` |
 | Any AWS error | `aws sts get-caller-identity` (check credentials first) |
 
 ---

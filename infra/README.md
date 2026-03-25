@@ -41,6 +41,7 @@ See [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) for full architecture descri
 | `--sagemaker-instance` | ml.g5.xlarge | GPU instance type (must support bfloat16) |
 | `--region` | eu-west-1 | AWS region |
 | `--lambda-s3-bucket` | auto-created | S3 bucket for Lambda artifacts |
+| `--external-sagemaker-role-arn` | (none) | Use existing SageMaker role (for Domain integration) |
 
 ## Outputs
 

@@ -4,7 +4,7 @@ Standalone CLI tools for deploying and testing SageMaker endpoints outside Cloud
 
 ## CLI Entry Points (from `pyproject.toml`)
 
-- `deploy-vllm` -> `sagemaker_tools.deploy_vllm:main` — deploy SageMaker endpoint directly
+- `deploy-vllm` -> `sagemaker_tools.deploy_vllm:main` — deploy SageMaker endpoint directly (legacy DJL-LMI/vLLM; use `infra/deploy-full-stack.sh` for current TGI stack)
 - `test-endpoint` -> `sagemaker_tools.test_openai_endpoint:main` — test deployed endpoint
 - `cleanup` -> `sagemaker_tools.cleanup:main` — delete SageMaker resources
 

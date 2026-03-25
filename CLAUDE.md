@@ -17,7 +17,7 @@
 Browser -> OpenWebUI (Fargate/ALB) -> API Gateway -> Lambda -> SageMaker TGI (ml.g5.xlarge)
 ```
 
-Single CloudFormation stack (`infra/full-stack.yaml`) deploys 23 resources: SageMaker (TGI bfloat16), Lambda (OpenAI proxy), API Gateway v2, ECS Fargate (OpenWebUI + ALB), and IAM roles.
+Single CloudFormation stack (`infra/full-stack.yaml`) deploys up to 23 resources: SageMaker (TGI bfloat16), Lambda (OpenAI proxy), API Gateway v2, ECS Fargate (OpenWebUI + ALB), and IAM roles. When `ExternalSageMakerRoleArn` is provided, 22 resources are created (SageMaker role is skipped).
 
 Gemma 3 requires **bfloat16** — only Ampere+ GPUs (g5: A10G). T4/g4dn does NOT work. See `docs/sagemaker_quotas.md`.
 

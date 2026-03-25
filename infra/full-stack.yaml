@@ -191,7 +191,6 @@ Resources:
       Environment:
         Variables:
           SAGEMAKER_ENDPOINT_NAME: !Sub '${AWS::StackName}-vllm-endpoint'
-          AWS_REGION_NAME: !Ref AWS::Region
       Code:
         S3Bucket: !Ref LambdaS3Bucket
         S3Key: !Ref LambdaS3Key

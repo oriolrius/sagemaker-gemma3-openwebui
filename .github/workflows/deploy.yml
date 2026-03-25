@@ -51,11 +51,14 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Package Lambda function
         run: |
           echo "Creating Lambda deployment package..."
           mkdir -p .build/package
-          pip install boto3 --target .build/package --quiet
+          uv pip install --target .build/package boto3 --quiet
           cp -r lambda/openai-proxy/src/* .build/package/
           cd .build/package && zip -r ../lambda-openai-proxy.zip . -q
           echo "Lambda package created: $(du -h ../*.zip | cut -f1)"
@@ -200,7 +203,7 @@ jobs:
 
           ### Cost Warning
 
-          This stack costs approximately **\$0.76/hour** (\$18/day).
+          This stack costs approximately **\$1.46/hour** (\$35/day).
 
           **Remember to destroy the stack when done testing!**
           EOF

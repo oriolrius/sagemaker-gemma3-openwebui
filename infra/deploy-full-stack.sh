@@ -145,7 +145,7 @@ echo "  - SageMaker endpoint (~15-20 min to start)"
 echo "  - API Gateway + Lambda"
 echo "  - ECS Fargate service with OpenWebUI + ALB"
 echo ""
-echo "Estimated cost: ~\$0.80/hour (mostly SageMaker GPU)"
+echo "Estimated cost: ~\$1.46/hour (mostly SageMaker GPU)"
 echo ""
 read -p "Continue? [y/N] " -n 1 -r
 echo
@@ -171,11 +171,7 @@ mkdir -p "$BUILD_DIR/package"
 
 # Install dependencies using uv (boto3 is included in Lambda runtime, but install anyway for consistency)
 echo "Installing Lambda dependencies..."
-if command -v uv &> /dev/null; then
-    uv pip install --target "$BUILD_DIR/package" boto3 --quiet
-else
-    pip install --target "$BUILD_DIR/package" boto3 --quiet
-fi
+uv pip install --target "$BUILD_DIR/package" boto3 --quiet
 
 # Copy source code
 cp -r "$LAMBDA_DIR/src/"* "$BUILD_DIR/package/"
