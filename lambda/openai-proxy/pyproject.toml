@@ -1,6 +1,6 @@
 [project]
 name = "openai-proxy"
-version = "2.0.1"
+version = "2.0.2"
 description = "Lambda function that proxies OpenAI-compatible API requests to SageMaker TGI endpoint"
 readme = "README.md"
 requires-python = ">=3.11"
